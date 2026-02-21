@@ -21,8 +21,9 @@ public sealed class SimConnectService : ISimDataSource
     private bool _connected;
     private bool _onGround;
     private double _groundSpeedKts;
-    private double _fuelPercent;
-    private DateTimeOffset? _starveTriggeredAt;
+    private double _fuelTotalGallons;
+    private double _fuelCapacityGallons;
+    private DateTimeOffset _lastFuelWriteLogUtc = DateTimeOffset.MinValue;
 
     public SimConnectService(string appBaseDirectory, bool debugEnabled)
     {
@@ -52,7 +53,7 @@ public sealed class SimConnectService : ISimDataSource
 
         if (_simConnect is null)
         {
-            return new SimDataSnapshot(false, _onGround, _groundSpeedKts, _fuelPercent);
+            return new SimDataSnapshot(false, _onGround, _groundSpeedKts, _fuelTotalGallons, CalculateFuelPercent());
         }
 
         try
@@ -68,20 +69,22 @@ public sealed class SimConnectService : ISimDataSource
             Disconnect();
         }
 
-        return new SimDataSnapshot(_connected, _onGround, _groundSpeedKts, _fuelPercent);
+        return new SimDataSnapshot(_connected, _onGround, _groundSpeedKts, _fuelTotalGallons, CalculateFuelPercent());
     }
 
+    public double GetTotalFuel()
+    {
+        return _fuelTotalGallons;
+    }
 
-
-
-    public void SetFuelPercent(double fuelPercent)
+    public void SetTotalFuel(double value)
     {
         if (_simConnect is null)
         {
             return;
         }
 
-        var clampedFuelPercent = Math.Clamp(fuelPercent, 1.0, 100.0);
+        var safeValue = SanitizeNonNegative(value);
 
         Invoke(
             _simConnect,
@@ -92,59 +95,14 @@ public sealed class SimConnectService : ISimDataSource
             0u,
             1u,
             (uint)Marshal.SizeOf<FuelSetData>(),
-            [new FuelSetData { FuelTotalQuantityPercent = clampedFuelPercent }]);
+            [new FuelSetData { FuelTotalQuantityGallons = safeValue }]);
 
-        _fuelPercent = clampedFuelPercent;
-        _starveTriggeredAt = null;
+        _fuelTotalGallons = safeValue;
 
-        if (_debugEnabled)
+        if (_debugEnabled && DateTimeOffset.UtcNow - _lastFuelWriteLogUtc >= TimeSpan.FromSeconds(1))
         {
-            Console.WriteLine($"[SIMCONNECT] Fuel set to {clampedFuelPercent:F1}%");
-        }
-    }
-
-    public void ApplyFuelCut(int timeToCutSec, int fuelRampDownSec)
-    {
-        if (timeToCutSec > 0)
-        {
-            _starveTriggeredAt = null;
-            return;
-        }
-
-        if (_simConnect is null)
-        {
-            return;
-        }
-
-        var nowUtc = DateTimeOffset.UtcNow;
-        if (!_starveTriggeredAt.HasValue)
-        {
-            _starveTriggeredAt = nowUtc;
-            Console.WriteLine("[SIMCONNECT] Fuel starvation triggered");
-        }
-
-        var rampSeconds = Math.Max(1, fuelRampDownSec);
-        var elapsedSec = (nowUtc - _starveTriggeredAt.Value).TotalSeconds;
-        var progress = Math.Clamp(elapsedSec / rampSeconds, 0, 1);
-
-        const double minFuelPercent = 1.0;
-        var targetFuelPercent = minFuelPercent + ((100.0 - minFuelPercent) * (1.0 - progress));
-
-        var fuelLevel = Math.Clamp(targetFuelPercent, minFuelPercent, 100.0);
-        Invoke(
-            _simConnect,
-            "SetDataOnSimObject",
-            EnumValue<DefinitionId>(DefinitionId.FuelSet),
-            EnumValue<ObjectId>(ObjectId.User),
-            0u,
-            0u,
-            1u,
-            (uint)Marshal.SizeOf<FuelSetData>(),
-            [new FuelSetData { FuelTotalQuantityPercent = fuelLevel }]);
-
-        if (_debugEnabled)
-        {
-            Console.WriteLine($"[SIMCONNECT] Fuel ramp step progress={progress:P0}, targetFuelPercent={targetFuelPercent:F1}");
+            _lastFuelWriteLogUtc = DateTimeOffset.UtcNow;
+            Console.WriteLine($"[SIMCONNECT] Fuel write (gallons): {safeValue:F3}");
         }
     }
 
@@ -212,6 +170,7 @@ public sealed class SimConnectService : ISimDataSource
 
         Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.Primary), "SIM ON GROUND", "Bool", float64, 0.0f, uint.MaxValue);
         Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.Primary), "GROUND VELOCITY", "knots", float64, 0.0f, uint.MaxValue);
+        // Using FUEL TOTAL QUANTITY in gallons for both reads and writes.
         Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.Primary), "FUEL TOTAL QUANTITY", "gallons", float64, 0.0f, uint.MaxValue);
         Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.Primary), "FUEL TOTAL CAPACITY", "gallons", float64, 0.0f, uint.MaxValue);
 
@@ -219,7 +178,8 @@ public sealed class SimConnectService : ISimDataSource
             .FirstOrDefault(m => m.Name == "RegisterDataDefineStruct" && m.IsGenericMethodDefinition)
             ?? throw new InvalidOperationException("Could not find RegisterDataDefineStruct generic method.");
 
-        Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.FuelSet), "FUEL TOTAL QUANTITY", "Percent", float64, 0.0f, uint.MaxValue);
+        // Writes also use total fuel quantity in gallons (not percent, and no per-tank writes).
+        Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.FuelSet), "FUEL TOTAL QUANTITY", "gallons", float64, 0.0f, uint.MaxValue);
 
         registerMethod.MakeGenericMethod(typeof(SimData)).Invoke(simConnect, [EnumValue<DefinitionId>(DefinitionId.Primary)]);
         registerMethod.MakeGenericMethod(typeof(FuelSetData)).Invoke(simConnect, [EnumValue<DefinitionId>(DefinitionId.FuelSet)]);
@@ -265,21 +225,23 @@ public sealed class SimConnectService : ISimDataSource
 
             var nextOnGround = simData.OnGround >= 0.5;
             var nextGroundSpeed = simData.GroundSpeedKts;
-            var nextFuelPercent = simData.FuelTotalCapacityGallons > 0
-                ? (simData.FuelTotalQuantityGallons / simData.FuelTotalCapacityGallons) * 100.0
-                : _fuelPercent;
+            var nextFuelTotal = SanitizeNonNegative(simData.FuelTotalQuantityGallons);
+            var nextFuelCapacity = SanitizeNonNegative(simData.FuelTotalCapacityGallons);
+            var nextFuelPercent = nextFuelCapacity > 0 ? (nextFuelTotal / nextFuelCapacity) * 100.0 : 0;
+            var previousFuelPercent = CalculateFuelPercent();
 
             if (nextOnGround != _onGround ||
                 Math.Abs(nextGroundSpeed - _groundSpeedKts) > 0.25 ||
-                Math.Abs(nextFuelPercent - _fuelPercent) > 0.25)
+                Math.Abs(nextFuelPercent - previousFuelPercent) > 0.25)
             {
                 Console.WriteLine(
-                    $"[SIMCONNECT] Data update: onGround={nextOnGround}, groundSpeedKts={nextGroundSpeed:F1}, fuelPercent={nextFuelPercent:F1}");
+                    $"[SIMCONNECT] Data update: onGround={nextOnGround}, groundSpeedKts={nextGroundSpeed:F1}, fuelTotalGal={nextFuelTotal:F2}");
             }
 
             _onGround = nextOnGround;
             _groundSpeedKts = nextGroundSpeed;
-            _fuelPercent = nextFuelPercent;
+            _fuelTotalGallons = nextFuelTotal;
+            _fuelCapacityGallons = nextFuelCapacity;
         }));
     }
 
@@ -311,6 +273,26 @@ public sealed class SimConnectService : ISimDataSource
     {
         Disconnect();
         _messageEvent.Dispose();
+    }
+
+    private double CalculateFuelPercent()
+    {
+        if (_fuelCapacityGallons <= 0)
+        {
+            return 0;
+        }
+
+        return Math.Clamp((_fuelTotalGallons / _fuelCapacityGallons) * 100.0, 0, 100);
+    }
+
+    private static double SanitizeNonNegative(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            return 0;
+        }
+
+        return Math.Max(0, value);
     }
 
     private static object EnumValue<TEnum>(TEnum value)
@@ -374,12 +356,12 @@ public sealed class SimConnectService : ISimDataSource
         {
             if (targetType.IsEnum)
             {
-                var raw = System.Convert.ChangeType(arg, Enum.GetUnderlyingType(targetType));
+                var raw = Convert.ChangeType(arg, Enum.GetUnderlyingType(targetType));
                 converted = Enum.ToObject(targetType, raw!);
                 return true;
             }
 
-            converted = System.Convert.ChangeType(arg, targetType);
+            converted = Convert.ChangeType(arg, targetType);
             return true;
         }
         catch
@@ -426,6 +408,6 @@ public sealed class SimConnectService : ISimDataSource
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi, Pack = 1)]
     private struct FuelSetData
     {
-        public double FuelTotalQuantityPercent;
+        public double FuelTotalQuantityGallons;
     }
 }
