@@ -98,7 +98,13 @@ public sealed class HttpServer
 
         if (context.Request.HttpMethod == "POST" && path == "/refuel")
         {
-            _stateService.RequestRefuel();
+            var ok = _stateService.RequestRefuel();
+            if (!ok)
+            {
+                await WriteJsonAsync(context.Response, new { ok = false, reason = "not allowed" }, HttpStatusCode.OK);
+                return;
+            }
+
             await WriteJsonAsync(context.Response, new { ok = true }, HttpStatusCode.OK);
             return;
         }

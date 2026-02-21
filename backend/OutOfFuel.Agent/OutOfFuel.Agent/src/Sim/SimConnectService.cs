@@ -72,6 +72,37 @@ public sealed class SimConnectService : ISimDataSource
     }
 
 
+
+
+    public void SetFuelPercent(double fuelPercent)
+    {
+        if (_simConnect is null)
+        {
+            return;
+        }
+
+        var clampedFuelPercent = Math.Clamp(fuelPercent, 1.0, 100.0);
+
+        Invoke(
+            _simConnect,
+            "SetDataOnSimObject",
+            EnumValue<DefinitionId>(DefinitionId.FuelSet),
+            EnumValue<ObjectId>(ObjectId.User),
+            0u,
+            0u,
+            1u,
+            (uint)Marshal.SizeOf<FuelSetData>(),
+            [new FuelSetData { FuelTotalQuantityPercent = clampedFuelPercent }]);
+
+        _fuelPercent = clampedFuelPercent;
+        _starveTriggeredAt = null;
+
+        if (_debugEnabled)
+        {
+            Console.WriteLine($"[SIMCONNECT] Fuel set to {clampedFuelPercent:F1}%");
+        }
+    }
+
     public void ApplyFuelCut(int timeToCutSec, int fuelRampDownSec)
     {
         if (timeToCutSec > 0)
