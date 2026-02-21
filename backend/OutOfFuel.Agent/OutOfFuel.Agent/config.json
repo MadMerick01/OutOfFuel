@@ -1,0 +1,8 @@
+{
+  "intervalSec": 900,
+  "warningSec": 90,
+  "refuelPercent": 40,
+  "refuelStopSpeedKts": 2,
+  "refuelStopHoldSec": 5,
+  "fuelRampDownSec": 30
+}

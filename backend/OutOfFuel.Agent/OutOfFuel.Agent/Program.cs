@@ -1,9 +1,11 @@
 using OutOfFuel.Agent.src.Http;
+using OutOfFuel.Agent.src.Models;
 using OutOfFuel.Agent.src.Services;
 
 var debugEnabled = args.Any(a => string.Equals(a, "--debug", StringComparison.OrdinalIgnoreCase));
 
-var stateService = new StateService(debugEnabled);
+var config = AgentConfig.LoadOrCreate(AppContext.BaseDirectory);
+var stateService = new StateService(debugEnabled, config);
 var httpServer = new HttpServer(stateService, "http://localhost:8080/");
 
 using var cts = new CancellationTokenSource();
@@ -14,6 +16,7 @@ Console.CancelKeyPress += (_, eventArgs) =>
 };
 
 Console.WriteLine("OutOfFuel.Agent running at http://localhost:8080");
+Console.WriteLine($"Loaded config from {Path.Combine(AppContext.BaseDirectory, AgentConfig.FileName)}");
 if (debugEnabled)
 {
     Console.WriteLine("Debug logging enabled.");
