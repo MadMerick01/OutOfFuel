@@ -22,9 +22,17 @@ var stateService = new StateService(debugEnabled, config, simDataSource);
 var httpServer = new HttpServer(stateService, "http://localhost:8080/");
 
 using var cts = new CancellationTokenSource();
+var isStopping = false;
 Console.CancelKeyPress += (_, eventArgs) =>
 {
     eventArgs.Cancel = true;
+    if (isStopping)
+    {
+        return;
+    }
+
+    isStopping = true;
+    Console.WriteLine("Ctrl+C received. Shutting down...");
     cts.Cancel();
 };
 
@@ -36,10 +44,19 @@ if (debugEnabled)
 }
 Console.WriteLine("Press Ctrl+C to stop.");
 
-await stateService.StartAsync(cts.Token);
-await httpServer.StartAsync(cts.Token);
-
-await Task.Delay(Timeout.Infinite, cts.Token).ContinueWith(_ => { }, TaskScheduler.Default);
-
-await httpServer.StopAsync();
-await stateService.StopAsync();
+try
+{
+    await stateService.StartAsync(cts.Token);
+    await httpServer.StartAsync(cts.Token);
+    await Task.Delay(Timeout.Infinite, cts.Token);
+}
+catch (OperationCanceledException)
+{
+    // graceful shutdown
+}
+finally
+{
+    await httpServer.StopAsync();
+    await stateService.StopAsync();
+    Console.WriteLine("Shutdown complete.");
+}
