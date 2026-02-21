@@ -2,6 +2,7 @@ namespace OutOfFuel.Agent.src.Models;
 
 public sealed class AppState
 {
+    public string Version { get; set; } = "unknown";
     public bool Connected { get; set; }
     public string State { get; set; } = "SAFE";
     public int TimeToCutSec { get; set; } = 900;

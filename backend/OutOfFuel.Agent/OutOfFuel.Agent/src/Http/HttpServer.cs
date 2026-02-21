@@ -89,6 +89,12 @@ public sealed class HttpServer
 
         var path = context.Request.Url?.AbsolutePath ?? string.Empty;
 
+        if (context.Request.HttpMethod == "GET" && path == "/health")
+        {
+            await WriteJsonAsync(context.Response, new { ok = true, connected = _stateService.IsConnected() }, HttpStatusCode.OK);
+            return;
+        }
+
         if (context.Request.HttpMethod == "GET" && path == "/state")
         {
             var state = _stateService.GetStateSnapshot();

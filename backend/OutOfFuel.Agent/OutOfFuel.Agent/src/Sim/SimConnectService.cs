@@ -57,7 +57,7 @@ public sealed class SimConnectService : ISimDataSource
 
         try
         {
-            if (_messageEvent.WaitOne(1))
+            while (_messageEvent.WaitOne(0))
             {
                 Invoke(_simConnect, "ReceiveMessage");
             }

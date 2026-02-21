@@ -1,3 +1,4 @@
+using System.Reflection;
 using OutOfFuel.Agent.src.Models;
 using OutOfFuel.Agent.src.Sim;
 
@@ -24,6 +25,7 @@ public sealed class StateService
         _simDataSource = simDataSource;
         _state = new AppState
         {
+            Version = ResolveVersion(),
             IntervalSec = _config.IntervalSec,
             WarningSec = _config.WarningSec,
             RefuelPercent = _config.RefuelPercent,
@@ -64,6 +66,7 @@ public sealed class StateService
         {
             return new AppState
             {
+                Version = _state.Version,
                 Connected = _state.Connected,
                 State = _state.State,
                 TimeToCutSec = _state.TimeToCutSec,
@@ -78,6 +81,14 @@ public sealed class StateService
                 StopHoldProgress = _state.StopHoldProgress,
                 LastRefuelSecAgo = _state.LastRefuelSecAgo,
             };
+        }
+    }
+
+    public bool IsConnected()
+    {
+        lock (_sync)
+        {
+            return _state.Connected;
         }
     }
 
@@ -123,7 +134,7 @@ public sealed class StateService
         {
             _state.Connected = simData.Connected;
             _state.OnGround = simData.OnGround;
-            _state.GroundSpeedKts = simData.GroundSpeedKts;
+            _state.GroundSpeedKts = SanitizeGroundSpeed(simData.GroundSpeedKts);
             _state.FuelPercent = simData.FuelPercent;
 
             var belowStopSpeed = _state.GroundSpeedKts < _config.RefuelStopSpeedKts;
@@ -167,6 +178,28 @@ public sealed class StateService
 
             _simDataSource.ApplyFuelCut(_state.TimeToCutSec, _state.FuelRampDownSec);
         }
+    }
+
+    private static string ResolveVersion()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var informationalVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            return informationalVersion;
+        }
+
+        return assembly.GetName().Version?.ToString() ?? "unknown";
+    }
+
+    private static double SanitizeGroundSpeed(double groundSpeedKts)
+    {
+        if (double.IsNaN(groundSpeedKts) || double.IsInfinity(groundSpeedKts))
+        {
+            return 0;
+        }
+
+        return Math.Max(0, groundSpeedKts);
     }
 
     private static string ResolveState(string previousState, int timeToCutSec, bool onGround, int warningSec)
