@@ -116,7 +116,17 @@ public sealed class StateService
             _state.GroundSpeedKts = simData.GroundSpeedKts;
             _state.FuelPercent = simData.FuelPercent;
 
-            _state.TimeToCutSec = Math.Max(0, _state.TimeToCutSec - 1);
+            var refuelOccurred = _refuelRequested;
+            if (refuelOccurred)
+            {
+                _state.TimeToCutSec = _config.IntervalSec;
+                _refuelRequested = false;
+            }
+
+            if (!_state.OnGround && _state.TimeToCutSec > 0)
+            {
+                _state.TimeToCutSec -= 1;
+            }
 
             if (_lastRefuelUtc.HasValue)
             {
@@ -124,23 +134,27 @@ public sealed class StateService
             }
 
             var previousState = _state.State;
-            _state.State = ResolveState(_state.TimeToCutSec, _state.OnGround, _config.WarningSec);
+            _state.State = ResolveState(previousState, _state.TimeToCutSec, _state.OnGround, _config.WarningSec, refuelOccurred);
 
             if (_debugEnabled && !string.Equals(previousState, _state.State, StringComparison.Ordinal))
             {
                 Console.WriteLine($"[DEBUG] State transition: {previousState} -> {_state.State} (timeToCutSec={_state.TimeToCutSec})");
             }
 
-            if (_debugEnabled && _refuelRequested)
+            if (_debugEnabled && refuelOccurred)
             {
                 Console.WriteLine("[DEBUG] Refuel requested.");
-                _refuelRequested = false;
             }
         }
     }
 
-    private static string ResolveState(int timeToCutSec, bool onGround, int warningSec)
+    private static string ResolveState(string previousState, int timeToCutSec, bool onGround, int warningSec, bool refuelOccurred)
     {
+        if (string.Equals(previousState, "STARVING", StringComparison.Ordinal) && !refuelOccurred)
+        {
+            return "STARVING";
+        }
+
         if (onGround)
         {
             return "LANDED";
