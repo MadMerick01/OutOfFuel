@@ -16,6 +16,7 @@ public sealed class StateService
     private Task? _loopTask;
     private DateTimeOffset? _lastRefuelUtc;
     private bool _refuelRequested;
+    private DateTimeOffset? _stopCandidateSinceUtc;
 
     public StateService(bool debugEnabled, AgentConfig config, ISimDataSource simDataSource)
     {
@@ -75,6 +76,7 @@ public sealed class StateService
                 GroundSpeedKts = _state.GroundSpeedKts,
                 FuelPercent = _state.FuelPercent,
                 RefuelAllowed = _state.RefuelAllowed,
+                StopHoldProgress = _state.StopHoldProgress,
                 LastRefuelSecAgo = _state.LastRefuelSecAgo,
             };
         }
@@ -84,6 +86,11 @@ public sealed class StateService
     {
         lock (_sync)
         {
+            if (!_state.RefuelAllowed)
+            {
+                return;
+            }
+
             _refuelRequested = true;
             _lastRefuelUtc = DateTimeOffset.UtcNow;
             _state.LastRefuelSecAgo = 0;
@@ -115,6 +122,27 @@ public sealed class StateService
             _state.OnGround = simData.OnGround;
             _state.GroundSpeedKts = simData.GroundSpeedKts;
             _state.FuelPercent = simData.FuelPercent;
+
+            var belowStopSpeed = _state.GroundSpeedKts < _config.RefuelStopSpeedKts;
+            if (_state.OnGround && belowStopSpeed)
+            {
+                _stopCandidateSinceUtc ??= DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                _stopCandidateSinceUtc = null;
+            }
+
+            var stopHoldElapsedSec = _stopCandidateSinceUtc.HasValue
+                ? (DateTimeOffset.UtcNow - _stopCandidateSinceUtc.Value).TotalSeconds
+                : 0;
+            var holdRequirementSec = _config.RefuelStopHoldSec;
+            var holdPercent = holdRequirementSec == 0
+                ? (_state.OnGround && belowStopSpeed ? 100 : 0)
+                : (int)Math.Clamp((stopHoldElapsedSec / holdRequirementSec) * 100, 0, 100);
+
+            _state.StopHoldProgress = holdPercent;
+            _state.RefuelAllowed = _state.OnGround && belowStopSpeed && holdPercent >= 100;
 
             var refuelOccurred = _refuelRequested;
             if (refuelOccurred)
