@@ -3,15 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OutOfFuel Overlay</title>
-    <link rel="stylesheet" href="styles.css" />
+    <title>Out Of Fuel Overlay</title>
+    <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <main class="panel">
-      <h1>OutOfFuel Overlay</h1>
-      <p>Static overlay shell for MSFS 2024 fuel/range telemetry.</p>
-      <p id="status">Agent status: waiting for backend integration.</p>
+    <main class="overlay" aria-live="polite">
+      <h1 class="title">OUT OF FUEL</h1>
+
+      <p id="countdown" class="countdown">--:--</p>
+      <p id="state" class="state state-safe">SAFE</p>
+      <p id="fuel" class="fuel">Fuel --%</p>
+
+      <button id="refuel" class="refuel" type="button" hidden>REFUEL</button>
+      <p id="status" class="status" hidden>Agent not running</p>
     </main>
+
     <script src="app.js"></script>
   </body>
 </html>
