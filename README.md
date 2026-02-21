@@ -2,10 +2,10 @@
 
 ## TESTING REQUIRED NEXT STEPS
 Run agent with MSFS closed.
-Confirm it starts and /state loads (connected=false).
-Start MSFS.
-Confirm /state flips connected=true within ~3 seconds.
-In a basic GA aircraft:
+1. Confirm it starts and /state loads (connected=false).
+2. Start MSFS.
+3. Confirm /state flips connected=true within ~3 seconds.
+4. In a basic GA aircraft:
 Confirm fuelTotalCapacity > 0.
 Confirm leakActive while airborne and fuelTotal trends downward.
 Land and stop → refuelAllowed becomes true → press refuel → fuel jumps to 40% capacity.
