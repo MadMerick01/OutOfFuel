@@ -1,4 +1,5 @@
 using OutOfFuel.Agent.src.Models;
+using OutOfFuel.Agent.src.Sim;
 
 namespace OutOfFuel.Agent.src.Services;
 
@@ -8,6 +9,7 @@ public sealed class StateService
     private readonly AgentConfig _config;
     private readonly object _sync = new();
     private readonly AppState _state;
+    private readonly ISimDataSource _simDataSource;
     private readonly PeriodicTimer _timer = new(TimeSpan.FromSeconds(1));
 
     private CancellationTokenSource? _loopCts;
@@ -15,10 +17,11 @@ public sealed class StateService
     private DateTimeOffset? _lastRefuelUtc;
     private bool _refuelRequested;
 
-    public StateService(bool debugEnabled, AgentConfig config)
+    public StateService(bool debugEnabled, AgentConfig config, ISimDataSource simDataSource)
     {
         _debugEnabled = debugEnabled;
         _config = config;
+        _simDataSource = simDataSource;
         _state = new AppState
         {
             IntervalSec = _config.IntervalSec,
@@ -51,6 +54,7 @@ public sealed class StateService
         }
 
         _timer.Dispose();
+        _simDataSource.Dispose();
         _loopCts.Dispose();
     }
 
@@ -103,8 +107,15 @@ public sealed class StateService
 
     private void Tick()
     {
+        var simData = _simDataSource.Poll();
+
         lock (_sync)
         {
+            _state.Connected = simData.Connected;
+            _state.OnGround = simData.OnGround;
+            _state.GroundSpeedKts = simData.GroundSpeedKts;
+            _state.FuelPercent = simData.FuelPercent;
+
             _state.TimeToCutSec = Math.Max(0, _state.TimeToCutSec - 1);
 
             if (_lastRefuelUtc.HasValue)
