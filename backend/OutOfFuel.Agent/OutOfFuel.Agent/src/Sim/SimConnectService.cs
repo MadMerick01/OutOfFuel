@@ -9,116 +9,130 @@ public sealed class SimConnectService : ISimDataSource
 
     private readonly string _simConnectDllPath;
     private readonly bool _debugEnabled;
-    private readonly Type _simConnectType;
-    private readonly Type _simConnectDataTypeEnum;
-    private readonly Type _simConnectPeriodEnum;
-
     private readonly AutoResetEvent _messageEvent = new(false);
+    private readonly object _sync = new();
 
     private object? _simConnect;
+    private Type? _simConnectType;
+    private Type? _simConnectDataTypeEnum;
+    private Type? _simConnectPeriodEnum;
     private DateTimeOffset _nextConnectAttemptUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastFuelWriteLogUtc = DateTimeOffset.MinValue;
 
     private bool _connected;
     private bool _onGround;
     private double _groundSpeedKts;
     private double _fuelTotalGallons;
     private double _fuelCapacityGallons;
-    private DateTimeOffset _lastFuelWriteLogUtc = DateTimeOffset.MinValue;
 
     public SimConnectService(string appBaseDirectory, bool debugEnabled)
     {
         _debugEnabled = debugEnabled;
         _simConnectDllPath = Path.Combine(appBaseDirectory, "lib", "SimConnect", "Microsoft.FlightSimulator.SimConnect.dll");
-
-        if (!File.Exists(_simConnectDllPath))
-        {
-            throw new InvalidOperationException(
-                "SimConnect managed DLL was not found. Place Microsoft.FlightSimulator.SimConnect.dll in '" +
-                "backend/OutOfFuel.Agent/OutOfFuel.Agent/lib/SimConnect/" +
-                $"' (resolved runtime path: '{_simConnectDllPath}') and restart OutOfFuel.Agent.");
-        }
-
-        var simConnectAssembly = Assembly.LoadFrom(_simConnectDllPath);
-        _simConnectType = simConnectAssembly.GetType("Microsoft.FlightSimulator.SimConnect.SimConnect")
-            ?? throw new InvalidOperationException("Unable to load SimConnect type Microsoft.FlightSimulator.SimConnect.SimConnect.");
-        _simConnectDataTypeEnum = simConnectAssembly.GetType("Microsoft.FlightSimulator.SimConnect.SIMCONNECT_DATATYPE")
-            ?? throw new InvalidOperationException("Unable to load SIMCONNECT_DATATYPE enum from SimConnect assembly.");
-        _simConnectPeriodEnum = simConnectAssembly.GetType("Microsoft.FlightSimulator.SimConnect.SIMCONNECT_PERIOD")
-            ?? throw new InvalidOperationException("Unable to load SIMCONNECT_PERIOD enum from SimConnect assembly.");
     }
 
     public SimDataSnapshot Poll()
     {
         EnsureConnected();
 
-        if (_simConnect is null)
+        object? simConnect;
+        lock (_sync)
         {
-            return new SimDataSnapshot(false, _onGround, _groundSpeedKts, _fuelTotalGallons, CalculateFuelPercent());
+            simConnect = _simConnect;
         }
 
-        try
+        if (simConnect is not null)
         {
-            while (_messageEvent.WaitOne(0))
+            try
             {
-                Invoke(_simConnect, "ReceiveMessage");
+                while (_messageEvent.WaitOne(0))
+                {
+                    Invoke(simConnect, "ReceiveMessage");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[SIMCONNECT] Disconnected while reading: {ex.Message}");
+                Disconnect();
             }
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[SIMCONNECT] Disconnected while reading: {ex.Message}");
-            Disconnect();
-        }
 
-        return new SimDataSnapshot(_connected, _onGround, _groundSpeedKts, _fuelTotalGallons, CalculateFuelPercent());
+        lock (_sync)
+        {
+            return new SimDataSnapshot(_connected, _onGround, _groundSpeedKts, _fuelTotalGallons, CalculateFuelPercentUnsafe(), _fuelCapacityGallons);
+        }
     }
 
     public double GetTotalFuel()
     {
-        return _fuelTotalGallons;
+        lock (_sync)
+        {
+            return _fuelTotalGallons;
+        }
     }
 
     public void SetTotalFuel(double value)
     {
-        if (_simConnect is null)
+        var safeValue = SanitizeNonNegative(value);
+
+        object? simConnect;
+        lock (_sync)
+        {
+            simConnect = _simConnect;
+        }
+
+        if (simConnect is null)
         {
             return;
         }
 
-        var safeValue = SanitizeNonNegative(value);
-
-        Invoke(
-            _simConnect,
-            "SetDataOnSimObject",
-            EnumValue<DefinitionId>(DefinitionId.FuelSet),
-            EnumValue<ObjectId>(ObjectId.User),
-            0u,
-            0u,
-            1u,
-            (uint)Marshal.SizeOf<FuelSetData>(),
-            [new FuelSetData { FuelTotalQuantityGallons = safeValue }]);
-
-        _fuelTotalGallons = safeValue;
-
-        if (_debugEnabled && DateTimeOffset.UtcNow - _lastFuelWriteLogUtc >= TimeSpan.FromSeconds(1))
+        try
         {
-            _lastFuelWriteLogUtc = DateTimeOffset.UtcNow;
-            Console.WriteLine($"[SIMCONNECT] Fuel write (gallons): {safeValue:F3}");
+            Invoke(
+                simConnect,
+                "SetDataOnSimObject",
+                EnumValue<DefinitionId>(DefinitionId.FuelSet),
+                EnumValue<ObjectId>(ObjectId.User),
+                0u,
+                0u,
+                1u,
+                (uint)Marshal.SizeOf<FuelSetData>(),
+                [new FuelSetData { FuelTotalQuantityGallons = safeValue }]);
+
+            lock (_sync)
+            {
+                _fuelTotalGallons = safeValue;
+
+                if (_debugEnabled && DateTimeOffset.UtcNow - _lastFuelWriteLogUtc >= TimeSpan.FromSeconds(1))
+                {
+                    _lastFuelWriteLogUtc = DateTimeOffset.UtcNow;
+                    Console.WriteLine($"[SIMCONNECT] Fuel write (gallons): {safeValue:F3}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SIMCONNECT] Fuel write failed: {ex.Message}");
+            Disconnect();
         }
     }
 
     private void EnsureConnected()
     {
-        if (_simConnect is not null)
+        lock (_sync)
         {
-            return;
-        }
+            if (_simConnect is not null)
+            {
+                return;
+            }
 
-        if (DateTimeOffset.UtcNow < _nextConnectAttemptUtc)
-        {
-            return;
-        }
+            if (DateTimeOffset.UtcNow < _nextConnectAttemptUtc)
+            {
+                return;
+            }
 
-        _nextConnectAttemptUtc = DateTimeOffset.UtcNow.Add(ReconnectInterval);
+            _nextConnectAttemptUtc = DateTimeOffset.UtcNow.Add(ReconnectInterval);
+        }
 
         try
         {
@@ -133,23 +147,25 @@ public sealed class SimConnectService : ISimDataSource
 
     private void Connect()
     {
+        var simConnectType = EnsureSimConnectTypesLoaded();
+
         Console.WriteLine("[SIMCONNECT] Attempting connection...");
 
-        _simConnect = Activator.CreateInstance(
-            _simConnectType,
+        var simConnect = Activator.CreateInstance(
+            simConnectType,
             "OutOfFuel.Agent",
             IntPtr.Zero,
             0u,
             _messageEvent,
             0u) ?? throw new InvalidOperationException("Failed to create SimConnect instance.");
 
-        HookEvents(_simConnect);
-        RegisterDataDefinition(_simConnect);
+        HookEvents(simConnect);
+        RegisterDataDefinition(simConnect);
 
-        var periodSecond = Enum.Parse(_simConnectPeriodEnum, "SECOND", ignoreCase: false);
+        var periodSecond = Enum.Parse(_simConnectPeriodEnum!, "SECOND", ignoreCase: false);
 
         Invoke(
-            _simConnect,
+            simConnect,
             "RequestDataOnSimObject",
             EnumValue<DefinitionId>(DefinitionId.Primary),
             EnumValue<RequestId>(RequestId.Primary),
@@ -160,25 +176,57 @@ public sealed class SimConnectService : ISimDataSource
             0u,
             0u);
 
-        _connected = true;
+        lock (_sync)
+        {
+            _simConnect = simConnect;
+            _connected = true;
+        }
+
         Console.WriteLine("[SIMCONNECT] Connected.");
+    }
+
+    private Type EnsureSimConnectTypesLoaded()
+    {
+        lock (_sync)
+        {
+            if (_simConnectType is not null)
+            {
+                return _simConnectType;
+            }
+
+            if (!File.Exists(_simConnectDllPath))
+            {
+                throw new InvalidOperationException(
+                    "SimConnect managed DLL was not found. Place Microsoft.FlightSimulator.SimConnect.dll in '" +
+                    "backend/OutOfFuel.Agent/OutOfFuel.Agent/lib/SimConnect/" +
+                    $"' (resolved runtime path: '{_simConnectDllPath}').");
+            }
+
+            var simConnectAssembly = Assembly.LoadFrom(_simConnectDllPath);
+            _simConnectType = simConnectAssembly.GetType("Microsoft.FlightSimulator.SimConnect.SimConnect")
+                ?? throw new InvalidOperationException("Unable to load SimConnect type Microsoft.FlightSimulator.SimConnect.SimConnect.");
+            _simConnectDataTypeEnum = simConnectAssembly.GetType("Microsoft.FlightSimulator.SimConnect.SIMCONNECT_DATATYPE")
+                ?? throw new InvalidOperationException("Unable to load SIMCONNECT_DATATYPE enum from SimConnect assembly.");
+            _simConnectPeriodEnum = simConnectAssembly.GetType("Microsoft.FlightSimulator.SimConnect.SIMCONNECT_PERIOD")
+                ?? throw new InvalidOperationException("Unable to load SIMCONNECT_PERIOD enum from SimConnect assembly.");
+
+            return _simConnectType;
+        }
     }
 
     private void RegisterDataDefinition(object simConnect)
     {
-        var float64 = Enum.Parse(_simConnectDataTypeEnum, "FLOAT64", ignoreCase: false);
+        var float64 = Enum.Parse(_simConnectDataTypeEnum!, "FLOAT64", ignoreCase: false);
 
         Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.Primary), "SIM ON GROUND", "Bool", float64, 0.0f, uint.MaxValue);
         Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.Primary), "GROUND VELOCITY", "knots", float64, 0.0f, uint.MaxValue);
-        // Using FUEL TOTAL QUANTITY in gallons for both reads and writes.
         Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.Primary), "FUEL TOTAL QUANTITY", "gallons", float64, 0.0f, uint.MaxValue);
         Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.Primary), "FUEL TOTAL CAPACITY", "gallons", float64, 0.0f, uint.MaxValue);
 
-        var registerMethod = _simConnectType.GetMethods()
+        var registerMethod = _simConnectType!.GetMethods()
             .FirstOrDefault(m => m.Name == "RegisterDataDefineStruct" && m.IsGenericMethodDefinition)
             ?? throw new InvalidOperationException("Could not find RegisterDataDefineStruct generic method.");
 
-        // Writes also use total fuel quantity in gallons (not percent, and no per-tank writes).
         Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.FuelSet), "FUEL TOTAL QUANTITY", "gallons", float64, 0.0f, uint.MaxValue);
 
         registerMethod.MakeGenericMethod(typeof(SimData)).Invoke(simConnect, [EnumValue<DefinitionId>(DefinitionId.Primary)]);
@@ -227,31 +275,49 @@ public sealed class SimConnectService : ISimDataSource
             var nextGroundSpeed = simData.GroundSpeedKts;
             var nextFuelTotal = SanitizeNonNegative(simData.FuelTotalQuantityGallons);
             var nextFuelCapacity = SanitizeNonNegative(simData.FuelTotalCapacityGallons);
-            var nextFuelPercent = nextFuelCapacity > 0 ? (nextFuelTotal / nextFuelCapacity) * 100.0 : 0;
-            var previousFuelPercent = CalculateFuelPercent();
 
-            if (nextOnGround != _onGround ||
-                Math.Abs(nextGroundSpeed - _groundSpeedKts) > 0.25 ||
-                Math.Abs(nextFuelPercent - previousFuelPercent) > 0.25)
+            bool shouldLog;
+            lock (_sync)
+            {
+                var nextFuelPercent = nextFuelCapacity > 0 ? (nextFuelTotal / nextFuelCapacity) * 100.0 : 0;
+                var previousFuelPercent = CalculateFuelPercentUnsafe();
+
+                shouldLog = nextOnGround != _onGround ||
+                    Math.Abs(nextGroundSpeed - _groundSpeedKts) > 0.25 ||
+                    Math.Abs(nextFuelPercent - previousFuelPercent) > 0.25;
+
+                _onGround = nextOnGround;
+                _groundSpeedKts = nextGroundSpeed;
+                _fuelTotalGallons = nextFuelTotal;
+                _fuelCapacityGallons = nextFuelCapacity;
+            }
+
+            if (shouldLog)
             {
                 Console.WriteLine(
                     $"[SIMCONNECT] Data update: onGround={nextOnGround}, groundSpeedKts={nextGroundSpeed:F1}, fuelTotalGal={nextFuelTotal:F2}");
             }
-
-            _onGround = nextOnGround;
-            _groundSpeedKts = nextGroundSpeed;
-            _fuelTotalGallons = nextFuelTotal;
-            _fuelCapacityGallons = nextFuelCapacity;
         }));
     }
 
     private void Disconnect()
     {
-        if (_simConnect is not null)
+        object? simConnect;
+        var wasConnected = false;
+
+        lock (_sync)
+        {
+            simConnect = _simConnect;
+            wasConnected = _connected;
+            _simConnect = null;
+            _connected = false;
+        }
+
+        if (simConnect is not null)
         {
             try
             {
-                Invoke(_simConnect, "Dispose");
+                Invoke(simConnect, "Dispose");
             }
             catch
             {
@@ -259,14 +325,10 @@ public sealed class SimConnectService : ISimDataSource
             }
         }
 
-        _simConnect = null;
-
-        if (_connected)
+        if (wasConnected)
         {
             Console.WriteLine("[SIMCONNECT] Disconnected.");
         }
-
-        _connected = false;
     }
 
     public void Dispose()
@@ -275,7 +337,7 @@ public sealed class SimConnectService : ISimDataSource
         _messageEvent.Dispose();
     }
 
-    private double CalculateFuelPercent()
+    private double CalculateFuelPercentUnsafe()
     {
         if (_fuelCapacityGallons <= 0)
         {
