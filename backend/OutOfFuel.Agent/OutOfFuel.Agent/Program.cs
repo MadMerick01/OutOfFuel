@@ -1,11 +1,24 @@
 using OutOfFuel.Agent.src.Http;
 using OutOfFuel.Agent.src.Models;
 using OutOfFuel.Agent.src.Services;
+using OutOfFuel.Agent.src.Sim;
 
 var debugEnabled = args.Any(a => string.Equals(a, "--debug", StringComparison.OrdinalIgnoreCase));
 
 var config = AgentConfig.LoadOrCreate(AppContext.BaseDirectory);
-var stateService = new StateService(debugEnabled, config);
+ISimDataSource simDataSource;
+try
+{
+    simDataSource = new SimConnectService(AppContext.BaseDirectory, debugEnabled);
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"[SIMCONNECT] Startup failed: {ex.Message}");
+    Environment.ExitCode = 1;
+    return;
+}
+
+var stateService = new StateService(debugEnabled, config, simDataSource);
 var httpServer = new HttpServer(stateService, "http://localhost:8080/");
 
 using var cts = new CancellationTokenSource();
