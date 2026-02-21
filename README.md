@@ -1,17 +1,17 @@
 # OutOfFuel (MSFS 2024 Tool + Overlay)
 
 ## TESTING REQUIRED NEXT STEPS
-Run agent with MSFS closed
-Confirm it starts and /state loads (connected=false)
-Start MSFS
-Confirm /state flips connected=true within ~3 seconds
+Run agent with MSFS closed.
+Confirm it starts and /state loads (connected=false).
+Start MSFS.
+Confirm /state flips connected=true within ~3 seconds.
 In a basic GA aircraft:
-Confirm fuelTotalCapacity > 0
-Confirm leakActive while airborne and fuelTotal trends downward
-Land and stop → refuelAllowed becomes true → press refuel → fuel jumps to 40% capacity
+Confirm fuelTotalCapacity > 0.
+Confirm leakActive while airborne and fuelTotal trends downward.
+Land and stop → refuelAllowed becomes true → press refuel → fuel jumps to 40% capacity.
 If any of those fail, paste:
-/state JSON
-console output around the failure
+/state JSON.
+console output around the failure.
 
 ## OutOfFuel is a companion mod concept for Microsoft Flight Simulator 2024 with two parts:
 
