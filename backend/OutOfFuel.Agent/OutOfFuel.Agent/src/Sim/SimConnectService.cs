@@ -22,6 +22,7 @@ public sealed class SimConnectService : ISimDataSource
     private bool _onGround;
     private double _groundSpeedKts;
     private double _fuelPercent;
+    private DateTimeOffset? _starveTriggeredAt;
 
     public SimConnectService(string appBaseDirectory, bool debugEnabled)
     {
@@ -68,6 +69,52 @@ public sealed class SimConnectService : ISimDataSource
         }
 
         return new SimDataSnapshot(_connected, _onGround, _groundSpeedKts, _fuelPercent);
+    }
+
+
+    public void ApplyFuelCut(int timeToCutSec, int fuelRampDownSec)
+    {
+        if (timeToCutSec > 0)
+        {
+            _starveTriggeredAt = null;
+            return;
+        }
+
+        if (_simConnect is null)
+        {
+            return;
+        }
+
+        var nowUtc = DateTimeOffset.UtcNow;
+        if (!_starveTriggeredAt.HasValue)
+        {
+            _starveTriggeredAt = nowUtc;
+            Console.WriteLine("[SIMCONNECT] Fuel starvation triggered");
+        }
+
+        var rampSeconds = Math.Max(1, fuelRampDownSec);
+        var elapsedSec = (nowUtc - _starveTriggeredAt.Value).TotalSeconds;
+        var progress = Math.Clamp(elapsedSec / rampSeconds, 0, 1);
+
+        const double minFuelPercent = 1.0;
+        var targetFuelPercent = minFuelPercent + ((100.0 - minFuelPercent) * (1.0 - progress));
+
+        var fuelLevel = Math.Clamp(targetFuelPercent, minFuelPercent, 100.0);
+        Invoke(
+            _simConnect,
+            "SetDataOnSimObject",
+            EnumValue<DefinitionId>(DefinitionId.FuelSet),
+            EnumValue<ObjectId>(ObjectId.User),
+            0u,
+            0u,
+            1u,
+            (uint)Marshal.SizeOf<FuelSetData>(),
+            [new FuelSetData { FuelTotalQuantityPercent = fuelLevel }]);
+
+        if (_debugEnabled)
+        {
+            Console.WriteLine($"[SIMCONNECT] Fuel ramp step progress={progress:P0}, targetFuelPercent={targetFuelPercent:F1}");
+        }
     }
 
     private void EnsureConnected()
@@ -141,7 +188,10 @@ public sealed class SimConnectService : ISimDataSource
             .FirstOrDefault(m => m.Name == "RegisterDataDefineStruct" && m.IsGenericMethodDefinition)
             ?? throw new InvalidOperationException("Could not find RegisterDataDefineStruct generic method.");
 
+        Invoke(simConnect, "AddToDataDefinition", EnumValue<DefinitionId>(DefinitionId.FuelSet), "FUEL TOTAL QUANTITY", "Percent", float64, 0.0f, uint.MaxValue);
+
         registerMethod.MakeGenericMethod(typeof(SimData)).Invoke(simConnect, [EnumValue<DefinitionId>(DefinitionId.Primary)]);
+        registerMethod.MakeGenericMethod(typeof(FuelSetData)).Invoke(simConnect, [EnumValue<DefinitionId>(DefinitionId.FuelSet)]);
     }
 
     private void HookEvents(object simConnect)
@@ -320,6 +370,7 @@ public sealed class SimConnectService : ISimDataSource
     private enum DefinitionId
     {
         Primary = 0,
+        FuelSet = 1,
     }
 
     private enum RequestId
@@ -339,5 +390,11 @@ public sealed class SimConnectService : ISimDataSource
         public double GroundSpeedKts;
         public double FuelTotalQuantityGallons;
         public double FuelTotalCapacityGallons;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi, Pack = 1)]
+    private struct FuelSetData
+    {
+        public double FuelTotalQuantityPercent;
     }
 }
