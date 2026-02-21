@@ -15,7 +15,6 @@ public sealed class StateService
     private CancellationTokenSource? _loopCts;
     private Task? _loopTask;
     private DateTimeOffset? _lastRefuelUtc;
-    private bool _refuelRequested;
     private DateTimeOffset? _stopCandidateSinceUtc;
 
     public StateService(bool debugEnabled, AgentConfig config, ISimDataSource simDataSource)
@@ -82,18 +81,22 @@ public sealed class StateService
         }
     }
 
-    public void RequestRefuel()
+    public bool RequestRefuel()
     {
         lock (_sync)
         {
             if (!_state.RefuelAllowed)
             {
-                return;
+                return false;
             }
 
-            _refuelRequested = true;
+            _simDataSource.SetFuelPercent(_config.RefuelPercent);
+            _state.FuelPercent = _config.RefuelPercent;
+            _state.TimeToCutSec = _config.IntervalSec;
+            _state.State = "SAFE";
             _lastRefuelUtc = DateTimeOffset.UtcNow;
             _state.LastRefuelSecAgo = 0;
+            return true;
         }
     }
 
@@ -144,13 +147,6 @@ public sealed class StateService
             _state.StopHoldProgress = holdPercent;
             _state.RefuelAllowed = _state.OnGround && belowStopSpeed && holdPercent >= 100;
 
-            var refuelOccurred = _refuelRequested;
-            if (refuelOccurred)
-            {
-                _state.TimeToCutSec = _config.IntervalSec;
-                _refuelRequested = false;
-            }
-
             if (!_state.OnGround && _state.TimeToCutSec > 0)
             {
                 _state.TimeToCutSec -= 1;
@@ -162,25 +158,20 @@ public sealed class StateService
             }
 
             var previousState = _state.State;
-            _state.State = ResolveState(previousState, _state.TimeToCutSec, _state.OnGround, _config.WarningSec, refuelOccurred);
+            _state.State = ResolveState(previousState, _state.TimeToCutSec, _state.OnGround, _config.WarningSec);
 
             if (_debugEnabled && !string.Equals(previousState, _state.State, StringComparison.Ordinal))
             {
                 Console.WriteLine($"[DEBUG] State transition: {previousState} -> {_state.State} (timeToCutSec={_state.TimeToCutSec})");
             }
 
-            if (_debugEnabled && refuelOccurred)
-            {
-                Console.WriteLine("[DEBUG] Refuel requested.");
-            }
-
             _simDataSource.ApplyFuelCut(_state.TimeToCutSec, _state.FuelRampDownSec);
         }
     }
 
-    private static string ResolveState(string previousState, int timeToCutSec, bool onGround, int warningSec, bool refuelOccurred)
+    private static string ResolveState(string previousState, int timeToCutSec, bool onGround, int warningSec)
     {
-        if (string.Equals(previousState, "STARVING", StringComparison.Ordinal) && !refuelOccurred)
+        if (string.Equals(previousState, "STARVING", StringComparison.Ordinal))
         {
             return "STARVING";
         }
