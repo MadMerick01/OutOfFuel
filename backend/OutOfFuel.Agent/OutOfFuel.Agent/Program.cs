@@ -1,14 +1,29 @@
-using OutOfFuel.Agent.src.Config;
 using OutOfFuel.Agent.src.Http;
-using OutOfFuel.Agent.src.Sim;
+using OutOfFuel.Agent.src.Services;
 
-var config = new AgentConfiguration();
-var simBridge = new SimBridge();
-var overlayServer = new OverlayHttpServer();
+var debugEnabled = args.Any(a => string.Equals(a, "--debug", StringComparison.OrdinalIgnoreCase));
 
-Console.WriteLine("OutOfFuel.Agent bootstrap complete.");
-Console.WriteLine($"Overlay root: {config.OverlayRoot}");
-Console.WriteLine("SimConnect integration is intentionally not implemented yet.");
+var stateService = new StateService(debugEnabled);
+var httpServer = new HttpServer(stateService, "http://localhost:8080/");
 
-_ = simBridge;
-_ = overlayServer;
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, eventArgs) =>
+{
+    eventArgs.Cancel = true;
+    cts.Cancel();
+};
+
+Console.WriteLine("OutOfFuel.Agent running at http://localhost:8080");
+if (debugEnabled)
+{
+    Console.WriteLine("Debug logging enabled.");
+}
+Console.WriteLine("Press Ctrl+C to stop.");
+
+await stateService.StartAsync(cts.Token);
+await httpServer.StartAsync(cts.Token);
+
+await Task.Delay(Timeout.Infinite, cts.Token).ContinueWith(_ => { }, TaskScheduler.Default);
+
+await httpServer.StopAsync();
+await stateService.StopAsync();
