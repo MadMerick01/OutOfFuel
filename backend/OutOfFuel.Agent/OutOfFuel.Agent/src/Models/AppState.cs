@@ -13,5 +13,6 @@ public sealed class AppState
     public double GroundSpeedKts { get; set; }
     public double FuelPercent { get; set; } = 50;
     public bool RefuelAllowed { get; set; }
+    public int StopHoldProgress { get; set; }
     public int LastRefuelSecAgo { get; set; }
 }
