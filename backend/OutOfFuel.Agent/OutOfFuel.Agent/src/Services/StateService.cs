@@ -5,8 +5,9 @@ namespace OutOfFuel.Agent.src.Services;
 public sealed class StateService
 {
     private readonly bool _debugEnabled;
+    private readonly AgentConfig _config;
     private readonly object _sync = new();
-    private readonly AppState _state = new();
+    private readonly AppState _state;
     private readonly PeriodicTimer _timer = new(TimeSpan.FromSeconds(1));
 
     private CancellationTokenSource? _loopCts;
@@ -14,9 +15,18 @@ public sealed class StateService
     private DateTimeOffset? _lastRefuelUtc;
     private bool _refuelRequested;
 
-    public StateService(bool debugEnabled)
+    public StateService(bool debugEnabled, AgentConfig config)
     {
         _debugEnabled = debugEnabled;
+        _config = config;
+        _state = new AppState
+        {
+            IntervalSec = _config.IntervalSec,
+            WarningSec = _config.WarningSec,
+            RefuelPercent = _config.RefuelPercent,
+            FuelRampDownSec = _config.FuelRampDownSec,
+            TimeToCutSec = _config.IntervalSec,
+        };
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -54,6 +64,9 @@ public sealed class StateService
                 State = _state.State,
                 TimeToCutSec = _state.TimeToCutSec,
                 IntervalSec = _state.IntervalSec,
+                WarningSec = _state.WarningSec,
+                RefuelPercent = _state.RefuelPercent,
+                FuelRampDownSec = _state.FuelRampDownSec,
                 OnGround = _state.OnGround,
                 GroundSpeedKts = _state.GroundSpeedKts,
                 FuelPercent = _state.FuelPercent,
@@ -100,7 +113,7 @@ public sealed class StateService
             }
 
             var previousState = _state.State;
-            _state.State = ResolveState(_state.TimeToCutSec, _state.OnGround);
+            _state.State = ResolveState(_state.TimeToCutSec, _state.OnGround, _config.WarningSec);
 
             if (_debugEnabled && !string.Equals(previousState, _state.State, StringComparison.Ordinal))
             {
@@ -115,7 +128,7 @@ public sealed class StateService
         }
     }
 
-    private static string ResolveState(int timeToCutSec, bool onGround)
+    private static string ResolveState(int timeToCutSec, bool onGround, int warningSec)
     {
         if (onGround)
         {
@@ -127,7 +140,7 @@ public sealed class StateService
             return "STARVING";
         }
 
-        if (timeToCutSec <= 90)
+        if (timeToCutSec <= warningSec)
         {
             return "WARNING";
         }
