@@ -173,6 +173,8 @@ public sealed class StateService
             {
                 Console.WriteLine("[DEBUG] Refuel requested.");
             }
+
+            _simDataSource.ApplyFuelCut(_state.TimeToCutSec, _state.FuelRampDownSec);
         }
     }
 
