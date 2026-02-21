@@ -5,4 +5,5 @@ public readonly record struct SimDataSnapshot(
     bool OnGround,
     double GroundSpeedKts,
     double FuelTotal,
-    double FuelPercent);
+    double FuelPercent,
+    double FuelTotalCapacity);

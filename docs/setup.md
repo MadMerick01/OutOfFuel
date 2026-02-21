@@ -3,9 +3,8 @@
 ## Prerequisites
 
 - .NET SDK 8.0+
-- Microsoft Flight Simulator 2024 with SimConnect support
 - SimConnect managed DLL at:
-  `backend/OutOfFuel.Agent/OutOfFuel.Agent/lib/SimConnect/Microsoft.FlightSimulator.SimConnect.dll`
+  `backend/OutOfFuel.Agent/OutOfFuel.Agent/lib/SimConnect/Microsoft.FlightSimulator.SimConnect.dll` (optional at startup; required for simulator connectivity)
 
 ## 1) Run backend agent
 
@@ -19,6 +18,8 @@ dotnet run -- --debug
 Expected startup URL:
 
 - `http://localhost:8080`
+
+When the agent starts, the HTTP server is always available at `http://localhost:8080` even if the SimConnect DLL is missing or Microsoft Flight Simulator is not running. In that case, `/state` continues to respond with `connected=false` and the agent keeps retrying simulator connection in the background.
 
 Available endpoints:
 

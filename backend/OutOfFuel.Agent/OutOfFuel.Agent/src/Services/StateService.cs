@@ -21,6 +21,7 @@ public sealed class StateService
 
     private bool _hasCycle;
     private bool _starvingLatched;
+    private double _cachedFuelTotalCapacity;
 
     public StateService(bool debugEnabled, AgentConfig config, ISimDataSource simDataSource)
     {
@@ -114,10 +115,12 @@ public sealed class StateService
                 return (false, "not allowed");
             }
 
-            var baselineFuel = _hasCycle ? _state.StartFuelTotal : _state.FuelTotal;
-            var refuelTargetFromPercent = baselineFuel * (_config.RefuelPercent / 100.0);
-            var minimumRefuelTarget = _state.MinFuelTotal + Math.Max(_config.StarveEpsilon * 2, 0.1);
-            var targetFuelTotal = SanitizeFuel(Math.Max(refuelTargetFromPercent, minimumRefuelTarget));
+            var fuelTotalCapacity = ResolveFuelTotalCapacity();
+            var minFuelTotal = _state.MinFuelTotal;
+            var targetFuelTotal = fuelTotalCapacity * (_config.RefuelPercent / 100.0);
+            targetFuelTotal = Math.Max(targetFuelTotal, minFuelTotal + _config.StarveEpsilon);
+            targetFuelTotal = Math.Min(targetFuelTotal, fuelTotalCapacity);
+            targetFuelTotal = SanitizeFuel(targetFuelTotal);
 
             _simDataSource.SetTotalFuel(targetFuelTotal);
             _state.FuelTotal = targetFuelTotal;
@@ -168,6 +171,7 @@ public sealed class StateService
             _state.GroundSpeedKts = SanitizeGroundSpeed(simData.GroundSpeedKts);
             _state.FuelTotal = SanitizeFuel(simData.FuelTotal);
             _state.FuelPercent = SanitizePercent(simData.FuelPercent);
+            _cachedFuelTotalCapacity = SanitizeFuel(simData.FuelTotalCapacity);
 
             if (!_hasCycle && _state.Connected && _state.FuelTotal > 0)
             {
@@ -282,6 +286,17 @@ public sealed class StateService
             Console.WriteLine($"[DEBUG] Cycle start ({reason}): startFuelTotal={_state.StartFuelTotal:F3}, minFuelTotal={_state.MinFuelTotal:F3}");
             Console.WriteLine($"[DEBUG] drainPerSecond={_state.DrainPerSecond:F6}");
         }
+    }
+
+    private double ResolveFuelTotalCapacity()
+    {
+        var observedCapacity = Math.Max(_cachedFuelTotalCapacity, _state.StartFuelTotal);
+        if (observedCapacity > 0)
+        {
+            return observedCapacity;
+        }
+
+        return Math.Max(_state.FuelTotal, _state.MinFuelTotal + _config.StarveEpsilon);
     }
 
     private static string ResolveVersion()
