@@ -4,7 +4,7 @@ public interface ISimDataSource : IDisposable
 {
     SimDataSnapshot Poll();
 
-    void ApplyFuelCut(int timeToCutSec, int fuelRampDownSec);
+    double GetTotalFuel();
 
-    void SetFuelPercent(double fuelPercent);
+    void SetTotalFuel(double value);
 }

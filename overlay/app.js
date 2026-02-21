@@ -4,14 +4,17 @@ const POLL_MS = 200;
 const countdownEl = document.getElementById("countdown");
 const stateEl = document.getElementById("state");
 const fuelEl = document.getElementById("fuel");
+const leakEl = document.getElementById("leak");
+const drainEl = document.getElementById("drain");
 const refuelBtn = document.getElementById("refuel");
 const statusEl = document.getElementById("status");
+const holdWrapEl = document.getElementById("holdWrap");
+const holdBarEl = document.getElementById("holdBar");
 
 const stateClassByName = {
   SAFE: "state-safe",
   WARNING: "state-warning",
-  STARVING: "state-starving",
-  LANDED: "state-landed"
+  STARVING: "state-starving"
 };
 
 let isOffline = false;
@@ -23,6 +26,11 @@ function formatTime(seconds) {
   return `${mm}:${ss}`;
 }
 
+function toFinite(value, fallback = 0) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function showOffline() {
   if (isOffline) {
     return;
@@ -32,8 +40,11 @@ function showOffline() {
   countdownEl.textContent = "--:--";
   stateEl.textContent = "OFFLINE";
   stateEl.className = "state state-starving";
-  fuelEl.textContent = "Fuel --%";
+  fuelEl.textContent = "Fuel Total: --";
+  leakEl.textContent = "LEAK PAUSED";
+  drainEl.textContent = "Drain -- /sec";
   refuelBtn.hidden = true;
+  holdWrapEl.hidden = true;
   statusEl.hidden = false;
   statusEl.textContent = "Agent not running";
 }
@@ -49,8 +60,23 @@ function showOnline(data) {
   stateEl.textContent = state;
   stateEl.className = `state ${stateClass}`;
 
-  const fuel = Number(data?.fuelPercent);
-  fuelEl.textContent = `Fuel ${Number.isFinite(fuel) ? fuel.toFixed(1) : "--"}%`;
+  const fuelPercent = Number(data?.fuelPercent);
+  if (Number.isFinite(fuelPercent)) {
+    fuelEl.textContent = `Fuel ${fuelPercent.toFixed(1)}%`;
+  } else {
+    const fuelTotal = toFinite(data?.fuelTotal, 0);
+    fuelEl.textContent = `Fuel Total: ${fuelTotal.toFixed(2)}`;
+  }
+
+  const leakActive = Boolean(data?.leakActive);
+  leakEl.textContent = leakActive ? "LEAK ACTIVE" : "LEAK PAUSED";
+
+  const drainPerSecond = toFinite(data?.drainPerSecond, 0);
+  drainEl.textContent = `Drain ${drainPerSecond.toFixed(3)} /sec`;
+
+  const holdProgress = Math.max(0, Math.min(100, Math.round(toFinite(data?.stopHoldProgress, 0))));
+  holdWrapEl.hidden = false;
+  holdBarEl.style.width = `${holdProgress}%`;
 
   refuelBtn.hidden = !Boolean(data?.refuelAllowed);
 }

@@ -11,9 +11,12 @@ public sealed class AgentConfig
     public int IntervalSec { get; set; } = 900;
     public int WarningSec { get; set; } = 90;
     public int RefuelPercent { get; set; } = 40;
-    public int RefuelStopSpeedKts { get; set; } = 2;
+    public double RefuelStopSpeedKts { get; set; } = 2;
     public int RefuelStopHoldSec { get; set; } = 5;
-    public int FuelRampDownSec { get; set; } = 30;
+    public int TickHz { get; set; } = 10;
+    public double MinFuelPercentOfStart { get; set; } = 1.0;
+    public double MinFuelAbsolute { get; set; } = 0.25;
+    public double StarveEpsilon { get; set; } = 0.05;
 
     public static AgentConfig LoadOrCreate(string appBaseDirectory)
     {
@@ -33,6 +36,7 @@ public sealed class AgentConfig
         }
 
         config.Validate();
+        Save(configPath, config);
         return config;
     }
 
@@ -43,7 +47,10 @@ public sealed class AgentConfig
         ValidateRange(nameof(RefuelPercent), RefuelPercent, 1, 100);
         ValidateRange(nameof(RefuelStopSpeedKts), RefuelStopSpeedKts, 0, 100);
         ValidateRange(nameof(RefuelStopHoldSec), RefuelStopHoldSec, 0, 600);
-        ValidateRange(nameof(FuelRampDownSec), FuelRampDownSec, 0, IntervalSec);
+        ValidateRange(nameof(TickHz), TickHz, 1, 60);
+        ValidateRange(nameof(MinFuelPercentOfStart), MinFuelPercentOfStart, 0, 100);
+        ValidateRange(nameof(MinFuelAbsolute), MinFuelAbsolute, 0, 1_000_000);
+        ValidateRange(nameof(StarveEpsilon), StarveEpsilon, 0, 1_000_000);
     }
 
     private static void Save(string configPath, AgentConfig config)
@@ -66,13 +73,24 @@ public sealed class AgentConfig
             RefuelPercent = source.RefuelPercent,
             RefuelStopSpeedKts = source.RefuelStopSpeedKts,
             RefuelStopHoldSec = source.RefuelStopHoldSec,
-            FuelRampDownSec = source.FuelRampDownSec,
+            TickHz = source.TickHz,
+            MinFuelPercentOfStart = source.MinFuelPercentOfStart,
+            MinFuelAbsolute = source.MinFuelAbsolute,
+            StarveEpsilon = source.StarveEpsilon,
         };
     }
 
     private static void ValidateRange(string name, int value, int minInclusive, int maxInclusive)
     {
         if (value < minInclusive || value > maxInclusive)
+        {
+            throw new InvalidOperationException($"Configuration value '{name}' must be between {minInclusive} and {maxInclusive}. Actual: {value}.");
+        }
+    }
+
+    private static void ValidateRange(string name, double value, double minInclusive, double maxInclusive)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value) || value < minInclusive || value > maxInclusive)
         {
             throw new InvalidOperationException($"Configuration value '{name}' must be between {minInclusive} and {maxInclusive}. Actual: {value}.");
         }
