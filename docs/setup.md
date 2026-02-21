@@ -1,94 +1,74 @@
 # Setup
 
-## Repository layout
-
-- `backend/OutOfFuel.Agent/` - .NET 8 console agent solution and project.
-- `overlay/` - static HTML/CSS/JS overlay shell.
-- `docs/` - project notes and setup guidance.
-
 ## Prerequisites
 
 - .NET SDK 8.0+
-- Microsoft Flight Simulator with SimConnect
+- Microsoft Flight Simulator 2024 with SimConnect support
 - SimConnect managed DLL at:
   `backend/OutOfFuel.Agent/OutOfFuel.Agent/lib/SimConnect/Microsoft.FlightSimulator.SimConnect.dll`
 
-## Leak mechanic (total fuel only)
-
-The B mechanic is implemented using a single total fuel value from SimConnect (`FUEL TOTAL QUANTITY`, unit: **gallons**):
-
-- `timeToCutSec` counts down only while airborne (`onGround=false`), and pauses on ground.
-- A leak cycle starts on initial fuel read and after each successful refuel.
-- Cycle values:
-  - `startFuelTotal`: total fuel at cycle start.
-  - `minFuelTotal = max(startFuelTotal * (minFuelPercentOfStart/100), minFuelAbsolute)`
-  - `drainPerSecond = max((startFuelTotal - minFuelTotal) / intervalSec, 0)`
-- While airborne and connected, fuel drains continuously with delta-time and is clamped to not go below `minFuelTotal`.
-- STARVING latches when countdown reaches 0 or fuel hits `minFuelTotal + starveEpsilon`, and stays latched until successful refuel.
-
-## Config
-
-`backend/OutOfFuel.Agent/OutOfFuel.Agent/config.json` is created/updated automatically with defaults:
-
-```json
-{
-  "intervalSec": 900,
-  "warningSec": 90,
-  "refuelPercent": 40,
-  "refuelStopSpeedKts": 2,
-  "refuelStopHoldSec": 5,
-  "tickHz": 10,
-  "minFuelPercentOfStart": 1.0,
-  "minFuelAbsolute": 0.25,
-  "starveEpsilon": 0.05
-}
-```
-
-## Build backend
+## 1) Run backend agent
 
 From repository root:
-
-```bash
-cd backend/OutOfFuel.Agent
-dotnet build OutOfFuel.Agent.sln
-```
-
-## Run backend
 
 ```bash
 cd backend/OutOfFuel.Agent/OutOfFuel.Agent
 dotnet run -- --debug
 ```
 
-Endpoints:
+Expected startup URL:
 
-- `GET /health`
-- `GET /state`
-- `POST /refuel`
+- `http://localhost:8080`
 
-## Open overlay
+Available endpoints:
 
-Open `overlay/index.html` in a browser for local UI iteration.
+- `GET http://localhost:8080/health`
+- `GET http://localhost:8080/state`
+- `POST http://localhost:8080/refuel`
 
-## OBS Browser Source setup
+## 2) Run overlay in a browser
 
-### Option 1: Local file
+The overlay is static HTML/CSS/JS and polls `http://localhost:8080/state`.
 
-1. In OBS, add a **Browser Source**.
-2. Check **Local file**.
-3. Select `overlay/index.html` from this repository.
-4. Set a fixed canvas size (recommended below).
+### Option A: Open local file directly
 
-### Option 2: Local URL
+- Open `overlay/index.html` in your browser.
 
-1. Start the agent (`dotnet run -- --debug`) so the API is available on `http://localhost:8080`.
-2. Serve the `overlay/` folder with any local static server.
-3. In OBS Browser Source, uncheck **Local file** and set a URL (for example `http://localhost:3000`).
+### Option B: Serve overlay locally (recommended)
 
-### Recommended Browser Source settings
+From repository root:
+
+```bash
+cd overlay
+python3 -m http.server 3000
+```
+
+Then open:
+
+- `http://localhost:3000`
+
+## 3) Run overlay in OBS Browser Source
+
+1. Start backend agent first (`dotnet run -- --debug`).
+2. Add a **Browser Source** in OBS.
+3. Use one of the following:
+   - **Local file mode**: enable **Local file** and select `<repo>/overlay/index.html`
+   - **URL mode**: set URL to `http://localhost:3000` (if using `python3 -m http.server 3000`)
+
+Recommended OBS Browser Source dimensions:
 
 - **Width**: `520`
 - **Height**: `260`
-- **Shutdown source when not visible**: **Off**
 
-Turning off shutdown prevents the source from unloading and reconnecting repeatedly during scene switches.
+Recommended OBS toggles:
+
+- **Shutdown source when not visible**: Off
+- **Refresh browser when scene becomes active**: Off
+
+## Config file behavior
+
+The agent reads and writes:
+
+- `backend/OutOfFuel.Agent/OutOfFuel.Agent/config.json`
+
+If the file is missing, it is created with defaults. On load, values are validated and the current config is written back to disk.
